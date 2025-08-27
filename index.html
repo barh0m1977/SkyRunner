@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Sky Runner Mobile</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: linear-gradient(#1c2a4f, #0f162e);
+    font-family: Arial, sans-serif;
+    touch-action: none;
+  }
+  canvas { display: block; }
+  #ui {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    color: #fff;
+    text-shadow: 2px 2px 4px #000;
+    pointer-events: none;
+  }
+  #ui p, #ui h1, .btn { pointer-events: auto; }
+  .btn {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 20px;
+    margin: 5px;
+    cursor: pointer;
+    display: inline-block;
+    user-select: none;
+    font-size: 1rem;
+    border: 2px solid rgba(255,255,255,0.5);
+    backdrop-filter: blur(5px);
+    transition: background 0.3s, transform 0.1s;
+  }
+  .btn:hover { background: rgba(255,255,255,0.3); transform: scale(1.05); }
+  #ready-text {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 2em; font-weight: bold; color: #fff;
+    text-shadow: 2px 2px 5px #000;
+    animation: fadeOut 2s forwards;
+  }
+  @keyframes fadeOut { 0% { opacity:1;} 100% { opacity:0; display:none;} }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="menu">
+    <h1>🌌 Sky Runner</h1>
+    <div class="btn" onclick="startGame('easy')">Easy</div>
+    <div class="btn" onclick="startGame('medium')">Medium</div>
+    <div class="btn" onclick="startGame('hard')">Hard</div>
+  </div>
+  <div id="hud" style="display:none;">
+    <p>Score: <span id="score">0</span> | Best: <span id="best">0</span></p>
+  </div>
+  <div id="gameover" style="display:none;">
+    <h2>Game Over</h2>
+    <p>Your Score: <span id="finalScore">0</span></p>
+    <div class="btn" onclick="showMenu()">Main Menu</div>
+  </div>
+</div>
+<div id="ready-text" style="display: none;">Ready!</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+let W = window.innerWidth, H = window.innerHeight;
+canvas.width = W; canvas.height = H;
+
+// --- Load Images ---
+const marioRunImages = [];
+const marioJumpImage = new Image();
+const marioIdleImage = new Image();
+
+for (let i = 1; i <= 3; i++) {
+    const img = new Image();
+    img.src = `mario/mr${i}.png`;
+    marioRunImages.push(img);
+}
+
+marioJumpImage.src = 'mario/jump.png';
+marioIdleImage.src = 'mario/idle.png';
+
+let imagesLoaded = 0;
+function imageLoaded() {
+    imagesLoaded++;
+    if (imagesLoaded === marioRunImages.length + 2) showMenu();
+}
+marioRunImages.forEach(img => img.onload = imageLoaded);
+marioJumpImage.onload = imageLoaded;
+marioIdleImage.onload = imageLoaded;
+
+// --- Player ---
+let player = {
+    x: W * 0.1, y: H * 0.7,
+    w: W * 0.06, h: W * 0.12,
+    dy: 0, jumpPower: -H*0.007, gravity:H*0.0005,
+    grounded:true, isJumping:false, jumpHoldTime:0, maxJumpHold:25,
+    runFrameIndex:0, runAnimationSpeed:5, animationCounter:0
+};
+
+// --- Game variables ---
+let obstacles=[], coins=[];
+let score=0, bestScore = localStorage.getItem("bestScore") || 0;
+let gameSpeed=5, running=false, spawnTimer=0, coinTimer=0, difficulty="easy";
+
+// --- Stars ---
+let stars=[];
+function createStars() {
+    stars=[];
+    for(let i=0;i<200;i++){
+        stars.push({x:Math.random()*W, y:Math.random()*H, size:Math.random()*2+0.5, speed:Math.random()*0.5+0.1});
+    }
+}
+createStars();
+
+// --- Events ---
+window.addEventListener("resize", resizeCanvas);
+window.addEventListener("keydown", e => { if(e.code==="Space" && player.grounded){ player.isJumping=true; player.jumpHoldTime=0;} });
+window.addEventListener("keyup", e => { if(e.code==="Space"){ player.isJumping=false;} });
+canvas.addEventListener("touchstart",()=>{ if(running && player.grounded){ player.isJumping=true; player.jumpHoldTime=0;} });
+canvas.addEventListener("touchend",()=>{ player.isJumping=false; });
+
+// --- Functions ---
+function resizeCanvas() {
+    W=window.innerWidth; H=window.innerHeight;
+    canvas.width=W; canvas.height=H;
+    player.x = W*0.1; player.y=H*0.7; player.w=W*0.06; player.h=W*0.12;
+    player.jumpPower=-H*0.007; player.gravity=H*0.0005;
+    createStars();
+}
+
+function startGame(level){
+    difficulty=level;
+    score=0; obstacles=[]; coins=[]; running=true; gameSpeed=5;
+    document.getElementById("menu").style.display="none";
+    document.getElementById("gameover").style.display="none";
+    document.getElementById("hud").style.display="block";
+    const readyText=document.getElementById("ready-text");
+    readyText.style.display="block"; readyText.style.animation="fadeOut 2s forwards";
+    player.y = H*0.8 - player.h; player.dy=0; player.grounded=true;
+    setTimeout(()=>requestAnimationFrame(gameLoop),2000);
+}
+
+function gameLoop(){
+    if(!running) return;
+
+    // Background
+    ctx.clearRect(0,0,W,H); drawStars();
+
+    // Ground
+    ctx.fillStyle="#8B4513"; ctx.fillRect(0,H*0.8,W,H*0.2);
+    ctx.fillStyle="#A0522D"; ctx.fillRect(0,H*0.8+H*0.01,W,H*0.02);
+
+    // Dynamic speed
+    let difficultyFactor = difficulty==="easy"?0.0005: difficulty==="medium"?0.001:0.002;
+    gameSpeed = 5 + score*difficultyFactor;
+
+    // Player physics
+    if(player.isJumping && player.jumpHoldTime < player.maxJumpHold){
+        player.dy = player.jumpPower; player.jumpHoldTime++;
+    } else { player.isJumping=false; }
+    player.dy += player.gravity; player.y += player.dy;
+
+    if(player.y+player.h>=H*0.8){ player.y=H*0.8-player.h; player.dy=0; player.grounded=true; player.isJumping=false; } 
+    else { player.grounded=false; }
+
+    // Draw player
+    if(player.grounded){
+        player.animationCounter++;
+        if(player.animationCounter >= player.runAnimationSpeed){
+            player.runFrameIndex = (player.runFrameIndex+1) % marioRunImages.length;
+            player.animationCounter=0;
+        }
+        ctx.drawImage(marioRunImages[player.runFrameIndex], player.x, player.y, player.w, player.h);
+    } else { ctx.drawImage(marioJumpImage, player.x, player.y, player.w, player.h); }
+
+    // Spawn obstacles & coins
+    spawnTimer++; coinTimer++;
+    let spawnRate = 120/(gameSpeed/5);
+    if(spawnTimer>spawnRate){ let size=W*0.04 + Math.random()*W*0.04; obstacles.push({x:W,y:H*0.8-size,w:size,h:size}); spawnTimer=0; }
+    if(coinTimer>spawnRate*1.5){ let coinSize=W*0.02; coins.push({x:W,y:H*0.5 + Math.random()*H*0.2, w:coinSize,h:coinSize}); coinTimer=0; }
+
+    // Obstacles
+    ctx.fillStyle="#888";
+    for(let i=obstacles.length-1;i>=0;i--){
+        let o=obstacles[i]; o.x-=gameSpeed; ctx.fillRect(o.x,o.y,o.w,o.h);
+        if(collide(player,o)){ gameOver(); return; }
+        if(o.x+o.w<0) obstacles.splice(i,1);
+    }
+
+    // Coins
+    for(let i=coins.length-1;i>=0;i--){
+        let c=coins[i]; c.x-=gameSpeed;
+        ctx.fillStyle="gold"; ctx.fillRect(c.x,c.y,c.w,c.h);
+        ctx.fillStyle="#ffcc00"; ctx.fillRect(c.x+c.w*0.1,c.y+c.h*0.1,c.w*0.8,c.h*0.8);
+        if(collide(player,c)){ score+=10; coins.splice(i,1); }
+        else if(c.x+c.w<0) coins.splice(i,1);
+    }
+
+    // Score
+    score++; document.getElementById("score").innerText=score;
+    document.getElementById("best").innerText=bestScore;
+
+    requestAnimationFrame(gameLoop);
+}
+
+function drawStars(){ ctx.fillStyle="#fff"; for(const s of stars){ s.x-=s.speed; if(s.x<0)s.x=W; ctx.beginPath(); ctx.arc(s.x,s.y,s.size,0,Math.PI*2); ctx.fill(); } }
+function collide(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+
+function gameOver(){
+    running=false;
+    document.getElementById("hud").style.display="none";
+    document.getElementById("gameover").style.display="block";
+    document.getElementById("finalScore").innerText=score;
+    if(score>bestScore){ bestScore=score; localStorage.setItem("bestScore",bestScore); }
+}
+
+function showMenu(){
+    document.getElementById("menu").style.display="block";
+    document.getElementById("gameover").style.display="none";
+    document.getElementById("hud").style.display="none";
+    document.getElementById("best").innerText=bestScore;
+}
+</script>
+</body>
+</html>
